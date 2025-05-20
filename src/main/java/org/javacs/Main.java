@@ -3,6 +3,8 @@ package org.javacs;
 import java.util.Arrays;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.logging.FileHandler;
+import java.util.logging.SimpleFormatter;
 import org.javacs.lsp.*;
 
 public class Main {
@@ -18,7 +20,13 @@ public class Main {
 
     public static void main(String[] args) {
         boolean quiet = Arrays.stream(args).anyMatch("--quiet"::equals);
-
+        try {
+        FileHandler fileHandler = new FileHandler("jls.log");
+        fileHandler.setFormatter(new SimpleFormatter());
+        LOG.addHandler(fileHandler);
+        } catch (Exception e ) {
+            LOG.info(e.getMessage());
+        }
         if (quiet) {
             LOG.setLevel(Level.OFF);
         }
