@@ -6,6 +6,7 @@ import java.util.logging.Logger;
 import java.util.logging.FileHandler;
 import java.util.logging.SimpleFormatter;
 import org.javacs.lsp.*;
+import java.io.File;
 
 public class Main {
     private static final Logger LOG = Logger.getLogger("main");
@@ -21,12 +22,18 @@ public class Main {
     public static void main(String[] args) {
         boolean quiet = Arrays.stream(args).anyMatch("--quiet"::equals);
         try {
-        FileHandler fileHandler = new FileHandler("jls.log");
-        fileHandler.setFormatter(new SimpleFormatter());
-        LOG.addHandler(fileHandler);
+            FileHandler fileHandler = new FileHandler("jls.log");
+            fileHandler.setFormatter(new SimpleFormatter());
+            LOG.addHandler(fileHandler);
         } catch (Exception e ) {
             LOG.info(e.getMessage());
         }
+        // define hidden workspace directory
+        File directory = new File(".jls");
+        if (!directory.exists()) {
+            directory.mkdirs();
+        }
+
         if (quiet) {
             LOG.setLevel(Level.OFF);
         }
