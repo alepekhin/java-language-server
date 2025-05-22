@@ -1,7 +1,7 @@
 package org.javacs;
 
 import static org.hamcrest.Matchers.*;
-import static org.junit.Assert.*;
+import static org.hamcrest.MatcherAssert.assertThat;
 
 import com.sun.source.doctree.DocCommentTree;
 import com.sun.source.tree.ClassTree;
