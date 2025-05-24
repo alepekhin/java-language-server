@@ -22,7 +22,7 @@ public class Main {
     public static void main(String[] args) {
         boolean quiet = Arrays.stream(args).anyMatch("--quiet"::equals);
         try {
-            FileHandler fileHandler = new FileHandler("jls.log");
+            FileHandler fileHandler = new FileHandler(".jls/main.log");
             fileHandler.setFormatter(new SimpleFormatter());
             LOG.addHandler(fileHandler);
         } catch (Exception e ) {
