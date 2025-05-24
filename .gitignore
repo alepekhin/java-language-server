@@ -18,3 +18,4 @@
 *.iml
 *.vsix
 .DS_store
+.jls
