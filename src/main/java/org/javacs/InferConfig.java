@@ -3,48 +3,82 @@ package org.javacs;
 import com.google.devtools.build.lib.analysis.AnalysisProtos;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2.PathFragment;
+import com.google.gson.*;
+
 import java.io.File;
-import java.io.IOException;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.logging.Logger;
-import java.util.regex.Pattern;
-import java.util.stream.Stream;
-import java.net.URI;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
-import java.util.logging.Logger;
+import java.net.URI;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.net.URI;
+import java.util.*;
 import java.util.Collection;
-import java.util.Set;
 import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.logging.Logger;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 class InferConfig {
     private static final Logger LOG = Logger.getLogger("main");
 
     /** Root of the workspace that is currently open in VSCode */
     private final Path workspaceRoot;
+
     /** External dependencies specified manually by the user */
     private final Collection<String> externalDependencies;
+
     /** Location of the maven repository, usually ~/.m2 */
     private final Path mavenHome;
+
     /** Location of the gradle cache, usually ~/.gradle */
     private final Path gradleHome;
 
-    InferConfig(Path workspaceRoot, Collection<String> externalDependencies, Path mavenHome, Path gradleHome) {
+    Collection<String> readDependency(Path workspaceRoot) {
+        try {
+            Collection<String> deps = new ArrayList<>();
+            String json = Files.readString(Paths.get(workspaceRoot + "/.jls/settings.json"));
+            JsonObject jsonObject = JsonParser.parseString(json).getAsJsonObject();
+            JsonArray jsonArray = jsonObject.getAsJsonArray("java.externalDependencies");
+            for (JsonElement element : jsonArray) {
+                deps.add(element.getAsString());
+            }
+            return deps;
+        } catch (Exception e) {
+            LOG.warning(
+                    "Error while reading file "
+                            + (workspaceRoot + "/.jls/settings.json")
+                            + " : "
+                            + e.getMessage());
+            return new ArrayList<>();
+        }
+        // deps.add("org.springframework.boot:spring-boot-starter-web:3.4.5");
+        // deps.add("org.springframework:spring-web:6.2.7");
+        // deps.add("org.springframework:spring-webmvc:6.2.7");
+        // deps.add("org.springframework:spring-core:6.2.7");
+        // deps.add("org.springframework:spring-beans:6.2.7");
+        // deps.add("org.springframework:spring-context:6.2.7");
+        // return deps;
+        // .m2/repository/org/springframework/boot/spring-boot-starter/3.4.4/spring-boot-starter-3.4.4.jar does not exist
+    }
+
+    InferConfig(
+            Path workspaceRoot,
+            Collection<String> externalDependencies,
+            Path mavenHome,
+            Path gradleHome) {
         this.workspaceRoot = workspaceRoot;
-        this.externalDependencies = externalDependencies;
+        this.externalDependencies = readDependency(workspaceRoot);
         this.mavenHome = mavenHome;
         this.gradleHome = gradleHome;
+        LOG.warning("----------  deps " + this.externalDependencies);
     }
 
     InferConfig(Path workspaceRoot, Collection<String> externalDependencies) {
@@ -63,15 +97,17 @@ class InferConfig {
         return Paths.get(System.getProperty("user.home")).resolve(".gradle");
     }
 
-
     static boolean firstVisitClassPath = true;
     static final String classPathSerName = ".jls/classes.ser";
 
-    /** Find .jar files for external dependencies, for examples maven dependencies in ~/.m2 or jars in bazel-genfiles */
+    /**
+     * Find .jar files for external dependencies, for examples maven dependencies in ~/.m2 or jars
+     * in bazel-genfiles
+     */
     Set<Path> classPath() {
         // externalDependencies
         Set<Path> restored = restorePaths(classPathSerName);
-        LOG.info("restored object " + restored); 
+        LOG.info("restored object " + restored);
         if (firstVisitClassPath && restored != null) {
             firstVisitClassPath = false;
             return restored;
@@ -84,18 +120,21 @@ class InferConfig {
                 var a = Artifact.parse(id);
                 var found = findAnyJar(a, false);
                 if (found == NOT_FOUND) {
-                    LOG.warning(String.format("Couldn't find jar for %s in %s or %s", a, mavenHome, gradleHome));
+                    LOG.warning(
+                            String.format(
+                                    "Couldn't find jar for %s in %s or %s",
+                                    a, mavenHome, gradleHome));
                     continue;
                 }
                 result.add(found);
             }
-            //return result;
+            return result;
         } else {
 
             // Maven
             var pomXml = workspaceRoot.resolve("pom.xml");
             if (Files.exists(pomXml)) {
-                Set<Path> deps =  mvnDependencies(pomXml, "dependency:list");
+                Set<Path> deps = mvnDependencies(pomXml, "dependency:list");
                 result = deps;
             } else {
 
@@ -110,7 +149,10 @@ class InferConfig {
         var classpathEnvVar = System.getenv("CLASSPATH");
         LOG.fine(() -> "CLASSPATH=" + classpathEnvVar);
         if (classpathEnvVar != null) {
-            var paths = Stream.of(classpathEnvVar.split(System.getProperty("path.separator"))).map(Path::of).collect(Collectors.toSet());
+            var paths =
+                    Stream.of(classpathEnvVar.split(System.getProperty("path.separator")))
+                            .map(Path::of)
+                            .collect(Collectors.toSet());
             LOG.fine(() -> "Paths from CLASSPATH = " + paths);
             result = paths;
         }
@@ -138,7 +180,7 @@ class InferConfig {
     Set<Path> buildDocPath() {
         // externalDependencies
         Set<Path> restored = restorePaths(docPathSerName);
-        LOG.info("restored object " + restored); 
+        LOG.info("restored object " + restored);
         if (firstVisitDocPath && restored != null) {
             firstVisitDocPath = false;
             LOG.info("doc path restored");
@@ -152,7 +194,10 @@ class InferConfig {
                 var a = Artifact.parse(id);
                 var found = findAnyJar(a, true);
                 if (found == NOT_FOUND) {
-                    LOG.warning(String.format("Couldn't find doc jar for %s in %s or %s", a, mavenHome, gradleHome));
+                    LOG.warning(
+                            String.format(
+                                    "Couldn't find doc jar for %s in %s or %s",
+                                    a, mavenHome, gradleHome));
                     continue;
                 }
                 result.add(found);
@@ -168,12 +213,12 @@ class InferConfig {
             // Bazel
             var bazelWorkspaceRoot = bazelWorkspaceRoot();
             if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
-                result =  bazelSourcepath(bazelWorkspaceRoot);
+                result = bazelSourcepath(bazelWorkspaceRoot);
             }
         }
         if (restored == null) {
             savePaths(result, docPathSerName);
-        } 
+        }
         return result;
     }
 
@@ -201,7 +246,8 @@ class InferConfig {
     }
 
     private Path findGradleJar(Artifact artifact, boolean source) {
-        // Search for caches/modules-*/files-*/groupId/artifactId/version/*/artifactId-version[-sources].jar
+        // Search for
+        // caches/modules-*/files-*/groupId/artifactId/version/*/artifactId-version[-sources].jar
         var base = gradleHome.resolve("caches");
         var pattern =
                 "glob:"
@@ -229,20 +275,21 @@ class InferConfig {
     }
 
     static boolean firstVisitMvn = true;
-    static final String mvnSerName = ".jls/deps.ser"; 
+    static final String mvnSerName = ".jls/deps.ser";
 
     static Set<Path> mvnDependencies(Path pomXml, String goal) {
         Objects.requireNonNull(pomXml, "pom.xml path is null");
         try {
             Set<Path> restored = restorePaths(mvnSerName);
-            LOG.info("restored object " + restored); 
+            LOG.info("restored object " + restored);
             if (firstVisitMvn && restored != null) {
                 firstVisitMvn = false;
                 LOG.info("mvn path restored");
                 return restored;
             }
             var dependencies = new HashSet<Path>();
-            // TODO consider using mvn valide dependency:copy-dependencies -DoutputDirectory=??? instead
+            // TODO consider using mvn valide dependency:copy-dependencies -DoutputDirectory=???
+            // instead
             // Run maven as a subprocess
             String[] command = {
                 getMvnCommand(),
@@ -333,14 +380,21 @@ class InferConfig {
 
         // Add protos
         if (buildProtos(bazelWorkspaceRoot)) {
-            for (var relative : bazelAQuery(bazelWorkspaceRoot, "Javac", "--output", "proto_library")) {
+            for (var relative :
+                    bazelAQuery(bazelWorkspaceRoot, "Javac", "--output", "proto_library")) {
                 absolute.add(bazelWorkspaceRoot.resolve(relative));
             }
         }
 
         // Add rest of classpath
         for (var relative :
-                bazelAQuery(bazelWorkspaceRoot, "Javac", "--classpath", "java_library", "java_test", "java_binary")) {
+                bazelAQuery(
+                        bazelWorkspaceRoot,
+                        "Javac",
+                        "--classpath",
+                        "java_library",
+                        "java_test",
+                        "java_binary")) {
             absolute.add(bazelWorkspaceRoot.resolve(relative));
         }
         return absolute;
@@ -351,13 +405,19 @@ class InferConfig {
         var outputBase = bazelOutputBase(bazelWorkspaceRoot);
         for (var relative :
                 bazelAQuery(
-                        bazelWorkspaceRoot, "JavaSourceJar", "--sources", "java_library", "java_test", "java_binary")) {
+                        bazelWorkspaceRoot,
+                        "JavaSourceJar",
+                        "--sources",
+                        "java_library",
+                        "java_test",
+                        "java_binary")) {
             absolute.add(outputBase.resolve(relative));
         }
 
         // Add proto source files
         if (buildProtos(bazelWorkspaceRoot)) {
-            for (var relative : bazelAQuery(bazelWorkspaceRoot, "Javac", "--source_jars", "proto_library")) {
+            for (var relative :
+                    bazelAQuery(bazelWorkspaceRoot, "Javac", "--source_jars", "proto_library")) {
                 absolute.add(bazelWorkspaceRoot.resolve(relative));
             }
         }
@@ -423,7 +483,10 @@ class InferConfig {
     }
 
     private Set<String> bazelAQuery(
-            Path bazelWorkspaceRoot, String filterMnemonic, String filterArgument, String... kinds) {
+            Path bazelWorkspaceRoot,
+            String filterMnemonic,
+            String filterArgument,
+            String... kinds) {
         String kindUnion = "";
         for (var kind : kinds) {
             if (kindUnion.length() > 0) {
@@ -449,18 +512,22 @@ class InferConfig {
 
     private Set<String> readActionGraph(Path output, String filterArgument) {
         try {
-            var containerV2 = AnalysisProtosV2.ActionGraphContainer.parseFrom(Files.newInputStream(output));
-            if (containerV2.getArtifactsCount() != 0 && containerV2.getArtifactsList().get(0).getId() != 0) {
+            var containerV2 =
+                    AnalysisProtosV2.ActionGraphContainer.parseFrom(Files.newInputStream(output));
+            if (containerV2.getArtifactsCount() != 0
+                    && containerV2.getArtifactsList().get(0).getId() != 0) {
                 return readActionGraphFromV2(containerV2, filterArgument);
             }
-            var containerV1 = AnalysisProtos.ActionGraphContainer.parseFrom(Files.newInputStream(output));
+            var containerV1 =
+                    AnalysisProtos.ActionGraphContainer.parseFrom(Files.newInputStream(output));
             return readActionGraphFromV1(containerV1, filterArgument);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private Set<String> readActionGraphFromV1(AnalysisProtos.ActionGraphContainer container, String filterArgument) {
+    private Set<String> readActionGraphFromV1(
+            AnalysisProtos.ActionGraphContainer container, String filterArgument) {
         var argumentPaths = new HashSet<String>();
         var outputIds = new HashSet<String>();
         for (var action : container.getActionsList()) {
@@ -495,7 +562,8 @@ class InferConfig {
         return artifactPaths;
     }
 
-    private Set<String> readActionGraphFromV2(AnalysisProtosV2.ActionGraphContainer container, String filterArgument) {
+    private Set<String> readActionGraphFromV2(
+            AnalysisProtosV2.ActionGraphContainer container, String filterArgument) {
         var argumentPaths = new HashSet<String>();
         var outputIds = new HashSet<Integer>();
         for (var action : container.getActionsList()) {
@@ -519,7 +587,8 @@ class InferConfig {
                 // artifact is the output of another java action
                 continue;
             }
-            var relative = buildPath(container.getPathFragmentsList(), artifact.getPathFragmentId());
+            var relative =
+                    buildPath(container.getPathFragmentsList(), artifact.getPathFragmentId());
             if (!argumentPaths.contains(relative)) {
                 // artifact was not specified by --filterArgument
                 continue;
@@ -567,7 +636,7 @@ class InferConfig {
 
     static void saveObject(Object obj, String name) {
         try (FileOutputStream fos = new FileOutputStream(name);
-            ObjectOutputStream oos = new ObjectOutputStream(fos)) {
+                ObjectOutputStream oos = new ObjectOutputStream(fos)) {
             oos.writeObject(obj);
         } catch (Exception e) {
             // ignore
@@ -575,9 +644,9 @@ class InferConfig {
         }
     }
 
-    static public Object restoreObject(String name) {
+    public static Object restoreObject(String name) {
         try (FileInputStream fis = new FileInputStream(name);
-            ObjectInputStream ois = new ObjectInputStream(fis)) {
+                ObjectInputStream ois = new ObjectInputStream(fis)) {
             return ois.readObject();
         } catch (Exception e) {
             LOG.severe(e.getMessage());
@@ -586,21 +655,20 @@ class InferConfig {
     }
 
     static void savePaths(Collection<Path> paths, String name) {
-       saveObject(paths.stream().map(p -> p.toUri()).toList(), name);
+        saveObject(paths.stream().map(p -> p.toUri()).toList(), name);
     }
 
     static Set<Path> restorePaths(String name) {
         Object obj = restoreObject(name);
         if (obj != null) {
             Set<Path> result = new HashSet<>();
-            for (URI uri : (Collection<URI>)obj) {
+            for (URI uri : (Collection<URI>) obj) {
                 result.add(Paths.get(uri));
             }
             return result;
         }
         return null;
     }
-
 
     private static final Path NOT_FOUND = Paths.get("");
 }

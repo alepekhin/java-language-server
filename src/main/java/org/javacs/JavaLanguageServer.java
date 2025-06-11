@@ -24,6 +24,7 @@ import org.javacs.markup.ErrorProvider;
 import org.javacs.navigation.DefinitionProvider;
 import org.javacs.navigation.ReferenceProvider;
 import org.javacs.rewrite.*;
+import java.nio.file.FileSystems;
 
 class JavaLanguageServer extends LanguageServer {
     // TODO allow multiple workspace roots
