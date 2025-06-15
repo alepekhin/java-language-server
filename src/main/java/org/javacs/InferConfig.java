@@ -3,6 +3,7 @@ package org.javacs;
 import com.google.devtools.build.lib.analysis.AnalysisProtos;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2.PathFragment;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileSystems;
@@ -11,23 +12,30 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.logging.Logger;
+import java.util.regex.*;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
-import java.util.regex.*;
 
 class InferConfig {
     private static final Logger LOG = Logger.getLogger("main");
 
     /** Root of the workspace that is currently open in VSCode */
     private final Path workspaceRoot;
+
     /** External dependencies specified manually by the user */
     private final Collection<String> externalDependencies;
+
     /** Location of the maven repository, usually ~/.m2 */
     private final Path mavenHome;
+
     /** Location of the gradle cache, usually ~/.gradle */
     private final Path gradleHome;
 
-    InferConfig(Path workspaceRoot, Collection<String> externalDependencies, Path mavenHome, Path gradleHome) {
+    InferConfig(
+            Path workspaceRoot,
+            Collection<String> externalDependencies,
+            Path mavenHome,
+            Path gradleHome) {
         this.workspaceRoot = workspaceRoot;
         this.externalDependencies = externalDependencies;
         this.mavenHome = mavenHome;
@@ -50,36 +58,48 @@ class InferConfig {
         return Paths.get(System.getProperty("user.home")).resolve(".gradle");
     }
 
-    /** Find .jar files for external dependencies, for examples maven dependencies in ~/.m2 or jars in bazel-genfiles */
+    /**
+     * Find .jar files for external dependencies, for examples maven dependencies in ~/.m2 or jars
+     * in bazel-genfiles
+     */
     Set<Path> classPath() {
+        var result = new HashSet<Path>();
         // externalDependencies
         if (!externalDependencies.isEmpty()) {
-            var result = new HashSet<Path>();
             for (var id : externalDependencies) {
                 var a = Artifact.parse(id);
                 var found = findAnyJar(a, false);
                 if (found == NOT_FOUND) {
-                    LOG.warning(String.format("Couldn't find jar for %s in %s or %s", a, mavenHome, gradleHome));
+                    LOG.warning(
+                            String.format(
+                                    "Couldn't find jar for %s in %s or %s",
+                                    a, mavenHome, gradleHome));
                     continue;
                 }
                 result.add(found);
             }
-            return result;
+            //return result;
         }
 
         // Maven
         var pomXml = workspaceRoot.resolve("pom.xml");
         if (Files.exists(pomXml)) {
-            return mvnDependencies(pomXml, "dependency:list");
+            var deps = mvnDependencies(pomXml, "dependency:list");
+            result.addAll(deps);
+                LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII pom deps size "+deps.size());
         }
 
         // Gradle
         try {
             createPomFromBuildGradle();
-            var pom = workspaceRoot.resolve("./jls/pom.xml");
+            var pom = workspaceRoot.resolve(".jls/pom.xml");
+            LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII pom ??? "+pom);
             if (Files.exists(pom)) {
-                return mvnDependencies(pom, "dependency:sources");
+                var deps = mvnDependencies(pom, "dependency:list");
+                LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII jls depssize "+deps.size());
+                result.addAll(deps);
             }
+            LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII result "+result.size());
         } catch (IOException e) {
             LOG.warning(e.getMessage());
         }
@@ -87,10 +107,11 @@ class InferConfig {
         // Bazel
         var bazelWorkspaceRoot = bazelWorkspaceRoot();
         if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
-            return bazelClasspath(bazelWorkspaceRoot);
+            result.addAll(bazelClasspath(bazelWorkspaceRoot));
         }
 
-        return Collections.emptySet();
+        LOG.warning("total dependencies size: " + result.size()); 
+        return result;
     }
 
     private Path bazelWorkspaceRoot() {
@@ -104,33 +125,36 @@ class InferConfig {
 
     /** Find source .jar files in local maven repository. */
     Set<Path> buildDocPath() {
+        var result = new HashSet<Path>();
         // externalDependencies
         if (!externalDependencies.isEmpty()) {
-            var result = new HashSet<Path>();
             for (var id : externalDependencies) {
                 var a = Artifact.parse(id);
                 var found = findAnyJar(a, true);
                 if (found == NOT_FOUND) {
-                    LOG.warning(String.format("Couldn't find doc jar for %s in %s or %s", a, mavenHome, gradleHome));
+                    LOG.warning(
+                            String.format(
+                                    "Couldn't find doc jar for %s in %s or %s",
+                                    a, mavenHome, gradleHome));
                     continue;
                 }
                 result.add(found);
             }
-            return result;
+            //return result;
         }
 
         // Maven
         var pomXml = workspaceRoot.resolve("pom.xml");
         if (Files.exists(pomXml)) {
-            return mvnDependencies(pomXml, "dependency:sources");
+            result.addAll(mvnDependencies(pomXml, "dependency:sources"));
         }
 
         // Gradle
         try {
             createPomFromBuildGradle();
-            var pom = workspaceRoot.resolve("./jls/pom.xml");
+            var pom = workspaceRoot.resolve(".jls/pom.xml");
             if (Files.exists(pom)) {
-                return mvnDependencies(pom, "dependency:sources");
+                result.addAll(mvnDependencies(pom, "dependency:sources"));
             }
         } catch (IOException e) {
             LOG.warning(e.getMessage());
@@ -139,10 +163,11 @@ class InferConfig {
         // Bazel
         var bazelWorkspaceRoot = bazelWorkspaceRoot();
         if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
-            return bazelSourcepath(bazelWorkspaceRoot);
+            result.addAll(bazelSourcepath(bazelWorkspaceRoot));
         }
 
-        return Collections.emptySet();
+        LOG.warning("total doc paths size: " + result.size()); 
+        return result;
     }
 
     private Path findAnyJar(Artifact artifact, boolean source) {
@@ -169,7 +194,8 @@ class InferConfig {
     }
 
     private Path findGradleJar(Artifact artifact, boolean source) {
-        // Search for caches/modules-*/files-*/groupId/artifactId/version/*/artifactId-version[-sources].jar
+        // Search for
+        // caches/modules-*/files-*/groupId/artifactId/version/*/artifactId-version[-sources].jar
         var base = gradleHome.resolve("caches");
         var pattern =
                 "glob:"
@@ -199,7 +225,8 @@ class InferConfig {
     static Set<Path> mvnDependencies(Path pomXml, String goal) {
         Objects.requireNonNull(pomXml, "pom.xml path is null");
         try {
-            // TODO consider using mvn valide dependency:copy-dependencies -DoutputDirectory=??? instead
+            // TODO consider using mvn valide dependency:copy-dependencies -DoutputDirectory=???
+            // instead
             // Run maven as a subprocess
             String[] command = {
                 getMvnCommand(),
@@ -288,14 +315,21 @@ class InferConfig {
 
         // Add protos
         if (buildProtos(bazelWorkspaceRoot)) {
-            for (var relative : bazelAQuery(bazelWorkspaceRoot, "Javac", "--output", "proto_library")) {
+            for (var relative :
+                    bazelAQuery(bazelWorkspaceRoot, "Javac", "--output", "proto_library")) {
                 absolute.add(bazelWorkspaceRoot.resolve(relative));
             }
         }
 
         // Add rest of classpath
         for (var relative :
-                bazelAQuery(bazelWorkspaceRoot, "Javac", "--classpath", "java_library", "java_test", "java_binary")) {
+                bazelAQuery(
+                        bazelWorkspaceRoot,
+                        "Javac",
+                        "--classpath",
+                        "java_library",
+                        "java_test",
+                        "java_binary")) {
             absolute.add(bazelWorkspaceRoot.resolve(relative));
         }
         return absolute;
@@ -306,13 +340,19 @@ class InferConfig {
         var outputBase = bazelOutputBase(bazelWorkspaceRoot);
         for (var relative :
                 bazelAQuery(
-                        bazelWorkspaceRoot, "JavaSourceJar", "--sources", "java_library", "java_test", "java_binary")) {
+                        bazelWorkspaceRoot,
+                        "JavaSourceJar",
+                        "--sources",
+                        "java_library",
+                        "java_test",
+                        "java_binary")) {
             absolute.add(outputBase.resolve(relative));
         }
 
         // Add proto source files
         if (buildProtos(bazelWorkspaceRoot)) {
-            for (var relative : bazelAQuery(bazelWorkspaceRoot, "Javac", "--source_jars", "proto_library")) {
+            for (var relative :
+                    bazelAQuery(bazelWorkspaceRoot, "Javac", "--source_jars", "proto_library")) {
                 absolute.add(bazelWorkspaceRoot.resolve(relative));
             }
         }
@@ -378,7 +418,10 @@ class InferConfig {
     }
 
     private Set<String> bazelAQuery(
-            Path bazelWorkspaceRoot, String filterMnemonic, String filterArgument, String... kinds) {
+            Path bazelWorkspaceRoot,
+            String filterMnemonic,
+            String filterArgument,
+            String... kinds) {
         String kindUnion = "";
         for (var kind : kinds) {
             if (kindUnion.length() > 0) {
@@ -404,18 +447,22 @@ class InferConfig {
 
     private Set<String> readActionGraph(Path output, String filterArgument) {
         try {
-            var containerV2 = AnalysisProtosV2.ActionGraphContainer.parseFrom(Files.newInputStream(output));
-            if (containerV2.getArtifactsCount() != 0 && containerV2.getArtifactsList().get(0).getId() != 0) {
+            var containerV2 =
+                    AnalysisProtosV2.ActionGraphContainer.parseFrom(Files.newInputStream(output));
+            if (containerV2.getArtifactsCount() != 0
+                    && containerV2.getArtifactsList().get(0).getId() != 0) {
                 return readActionGraphFromV2(containerV2, filterArgument);
             }
-            var containerV1 = AnalysisProtos.ActionGraphContainer.parseFrom(Files.newInputStream(output));
+            var containerV1 =
+                    AnalysisProtos.ActionGraphContainer.parseFrom(Files.newInputStream(output));
             return readActionGraphFromV1(containerV1, filterArgument);
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private Set<String> readActionGraphFromV1(AnalysisProtos.ActionGraphContainer container, String filterArgument) {
+    private Set<String> readActionGraphFromV1(
+            AnalysisProtos.ActionGraphContainer container, String filterArgument) {
         var argumentPaths = new HashSet<String>();
         var outputIds = new HashSet<String>();
         for (var action : container.getActionsList()) {
@@ -450,7 +497,8 @@ class InferConfig {
         return artifactPaths;
     }
 
-    private Set<String> readActionGraphFromV2(AnalysisProtosV2.ActionGraphContainer container, String filterArgument) {
+    private Set<String> readActionGraphFromV2(
+            AnalysisProtosV2.ActionGraphContainer container, String filterArgument) {
         var argumentPaths = new HashSet<String>();
         var outputIds = new HashSet<Integer>();
         for (var action : container.getActionsList()) {
@@ -474,7 +522,8 @@ class InferConfig {
                 // artifact is the output of another java action
                 continue;
             }
-            var relative = buildPath(container.getPathFragmentsList(), artifact.getPathFragmentId());
+            var relative =
+                    buildPath(container.getPathFragmentsList(), artifact.getPathFragmentId());
             if (!argumentPaths.contains(relative)) {
                 // artifact was not specified by --filterArgument
                 continue;
@@ -526,24 +575,37 @@ class InferConfig {
         Path pomDirectory = Paths.get(".jls");
 
         List<Dependency> dependencies = new ArrayList<>();
-        List<Dependency> testDependencies = new ArrayList<>();
+        List<Dependency> platformDependencies = new ArrayList<>();
 
         List<String> lines = Files.readAllLines(gradleFilePath);
 
         // Pattern for implementation dependencies
-        Pattern implPattern = Pattern.compile("implementation[\\s*\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)['\"]");
+        Pattern implPattern =
+                Pattern.compile(
+                        "implementation[\\s*\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)['\"]");
         // Pattern for testImplementation dependencies
-        Pattern testImplPattern = Pattern.compile("testImplementation[\\s*,\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)?['\"]");
+        Pattern testImplPattern =
+                Pattern.compile(
+                        "testImplementation[\\s*,\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)?['\"]");
 
         for (String line : lines) {
-            System.out.println(line); 
             Matcher m = implPattern.matcher(line);
-            if (m.find()) {
-                dependencies.add(new Dependency(m.group(1), m.group(2), m.group(3)));
-            }
-            m = testImplPattern.matcher(line);
-            if (m.find()) {
-                testDependencies.add(new Dependency(m.group(1), m.group(2), m.group(3)));
+            if (line.contains("platform")) {
+                if (m.find()) {
+                    platformDependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), false));
+                }
+                m = testImplPattern.matcher(line);
+                if (m.find()) {
+                    platformDependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), true));
+                }
+            } else {
+                if (m.find()) {
+                    dependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), false));
+                }
+                m = testImplPattern.matcher(line);
+                if (m.find()) {
+                    dependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), true));
+                }
             }
         }
 
@@ -561,32 +623,47 @@ class InferConfig {
         pom.append("  <artifactId>my-app</artifactId>\n");
         pom.append("  <version>1.0-SNAPSHOT</version>\n");
 
-        if (!dependencies.isEmpty() || !testDependencies.isEmpty()) {
-            pom.append("  <dependencies>\n");
-
-            for (Dependency dep : dependencies) {
-                pom.append("    <dependency>\n");
-                pom.append("      <groupId>").append(dep.groupId.replace(":", "")).append("</groupId>\n");
-                pom.append("      <artifactId>").append(dep.artifactId).append("</artifactId>\n");
-                if (dep.version != null) {
-                    pom.append("      <version>").append(dep.version.replace(":", "")).append("</version>\n");
-                }
-                pom.append("    </dependency>\n");
+        pom.append("  <dependencyManagement>\n");
+        pom.append("    <dependencies>\n");
+        for (Dependency dep : platformDependencies) {
+            pom.append("      <dependency>\n");
+            pom.append("        <groupId>")
+                    .append(dep.groupId.replace(":", ""))
+                    .append("</groupId>\n");
+            pom.append("        <artifactId>").append(dep.artifactId).append("</artifactId>\n");
+            if (dep.version != null) {
+                pom.append("        <version>")
+                        .append(dep.version.replace(":", ""))
+                        .append("</version>\n");
             }
-
-            for (Dependency dep : testDependencies) {
-                pom.append("    <dependency>\n");
-                pom.append("      <groupId>").append(dep.groupId.replace(":", "")).append("</groupId>\n");
-                pom.append("      <artifactId>").append(dep.artifactId).append("</artifactId>\n");
-                if (dep.version != null) {
-                    pom.append("      <version>").append(dep.version.replace(":", "")).append("</version>\n");
-                }
-                pom.append("      <scope>test</scope>\n");
-                pom.append("    </dependency>\n");
+            pom.append("        <type>pom</type>\n");
+            if (dep.isTest) {
+                pom.append("        <scope>test</scope>\n");
             }
-
-            pom.append("  </dependencies>\n");
+            pom.append("      </dependency>\n"); 
         }
+        pom.append("    </dependencies>\n");
+        pom.append("  </dependencyManagement>\n");
+        pom.append("  <dependencies>\n");
+
+        for (Dependency dep : dependencies) {
+            pom.append("    <dependency>\n");
+            pom.append("      <groupId>")
+                    .append(dep.groupId.replace(":", ""))
+                    .append("</groupId>\n");
+            pom.append("      <artifactId>").append(dep.artifactId).append("</artifactId>\n");
+            if (dep.version != null) {
+                pom.append("      <version>")
+                        .append(dep.version.replace(":", ""))
+                        .append("</version>\n");
+            }
+            if (dep.isTest) {
+                pom.append("      <scope>test</scope>\n");
+            }
+            pom.append("    </dependency>\n");
+        }
+
+        pom.append("  </dependencies>\n");
 
         pom.append("</project>\n");
 
@@ -595,11 +672,9 @@ class InferConfig {
             Files.createDirectory(pomDirectory);
         }
         Files.write(pomDirectory.resolve(pomFileName), pom.toString().getBytes());
- 
     }
 
-    record Dependency(String groupId, String artifactId, String version){}
-
+    record Dependency(String groupId, String artifactId, String version, boolean isTest) {}
 
     private static final Path NOT_FOUND = Paths.get("");
 }
