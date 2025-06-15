@@ -13,6 +13,7 @@ import java.util.*;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import java.util.regex.*;
 
 class InferConfig {
     private static final Logger LOG = Logger.getLogger("main");
@@ -72,6 +73,17 @@ class InferConfig {
             return mvnDependencies(pomXml, "dependency:list");
         }
 
+        // Gradle
+        try {
+            createPomFromBuildGradle();
+            var pom = workspaceRoot.resolve("./jls/pom.xml");
+            if (Files.exists(pom)) {
+                return mvnDependencies(pom, "dependency:sources");
+            }
+        } catch (IOException e) {
+            LOG.warning(e.getMessage());
+        }
+
         // Bazel
         var bazelWorkspaceRoot = bazelWorkspaceRoot();
         if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
@@ -111,6 +123,17 @@ class InferConfig {
         var pomXml = workspaceRoot.resolve("pom.xml");
         if (Files.exists(pomXml)) {
             return mvnDependencies(pomXml, "dependency:sources");
+        }
+
+        // Gradle
+        try {
+            createPomFromBuildGradle();
+            var pom = workspaceRoot.resolve("./jls/pom.xml");
+            if (Files.exists(pom)) {
+                return mvnDependencies(pom, "dependency:sources");
+            }
+        } catch (IOException e) {
+            LOG.warning(e.getMessage());
         }
 
         // Bazel
@@ -496,6 +519,87 @@ class InferConfig {
             throw new RuntimeException(e);
         }
     }
+
+    private void createPomFromBuildGradle() throws IOException {
+        Path gradleFilePath = Paths.get("build.gradle");
+        Path pomFileName = Paths.get("pom.xml");
+        Path pomDirectory = Paths.get(".jls");
+
+        List<Dependency> dependencies = new ArrayList<>();
+        List<Dependency> testDependencies = new ArrayList<>();
+
+        List<String> lines = Files.readAllLines(gradleFilePath);
+
+        // Pattern for implementation dependencies
+        Pattern implPattern = Pattern.compile("implementation[\\s*\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)['\"]");
+        // Pattern for testImplementation dependencies
+        Pattern testImplPattern = Pattern.compile("testImplementation[\\s*,\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)?['\"]");
+
+        for (String line : lines) {
+            System.out.println(line); 
+            Matcher m = implPattern.matcher(line);
+            if (m.find()) {
+                dependencies.add(new Dependency(m.group(1), m.group(2), m.group(3)));
+            }
+            m = testImplPattern.matcher(line);
+            if (m.find()) {
+                testDependencies.add(new Dependency(m.group(1), m.group(2), m.group(3)));
+            }
+        }
+
+        // Generate basic pom.xml
+        StringBuilder pom = new StringBuilder();
+        pom.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        pom.append("<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n");
+        pom.append("         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
+        pom.append("         xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0\n");
+        pom.append("                             http://maven.apache.org/xsd/maven-4.0.0.xsd\">\n");
+        pom.append("  <modelVersion>4.0.0</modelVersion>\n");
+
+        // Placeholder project info
+        pom.append("  <groupId>com.example</groupId>\n");
+        pom.append("  <artifactId>my-app</artifactId>\n");
+        pom.append("  <version>1.0-SNAPSHOT</version>\n");
+
+        if (!dependencies.isEmpty() || !testDependencies.isEmpty()) {
+            pom.append("  <dependencies>\n");
+
+            for (Dependency dep : dependencies) {
+                pom.append("    <dependency>\n");
+                pom.append("      <groupId>").append(dep.groupId.replace(":", "")).append("</groupId>\n");
+                pom.append("      <artifactId>").append(dep.artifactId).append("</artifactId>\n");
+                if (dep.version != null) {
+                    pom.append("      <version>").append(dep.version.replace(":", "")).append("</version>\n");
+                }
+                pom.append("    </dependency>\n");
+            }
+
+            for (Dependency dep : testDependencies) {
+                pom.append("    <dependency>\n");
+                pom.append("      <groupId>").append(dep.groupId.replace(":", "")).append("</groupId>\n");
+                pom.append("      <artifactId>").append(dep.artifactId).append("</artifactId>\n");
+                if (dep.version != null) {
+                    pom.append("      <version>").append(dep.version.replace(":", "")).append("</version>\n");
+                }
+                pom.append("      <scope>test</scope>\n");
+                pom.append("    </dependency>\n");
+            }
+
+            pom.append("  </dependencies>\n");
+        }
+
+        pom.append("</project>\n");
+
+        // Write to pom.xml
+        if (!Files.exists(pomDirectory)) {
+            Files.createDirectory(pomDirectory);
+        }
+        Files.write(pomDirectory.resolve(pomFileName), pom.toString().getBytes());
+ 
+    }
+
+    record Dependency(String groupId, String artifactId, String version){}
+
 
     private static final Path NOT_FOUND = Paths.get("");
 }
