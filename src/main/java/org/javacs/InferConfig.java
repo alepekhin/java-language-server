@@ -3,27 +3,17 @@ package org.javacs;
 import com.google.devtools.build.lib.analysis.AnalysisProtos;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2;
 import com.google.devtools.build.lib.analysis.AnalysisProtosV2.PathFragment;
-import com.google.gson.*;
 
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.ObjectInputStream;
-import java.io.ObjectOutputStream;
-import java.net.URI;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 import java.util.logging.Logger;
+import java.util.regex.*;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 class InferConfig {
@@ -41,44 +31,15 @@ class InferConfig {
     /** Location of the gradle cache, usually ~/.gradle */
     private final Path gradleHome;
 
-    Collection<String> readDependency(Path workspaceRoot) {
-        try {
-            Collection<String> deps = new ArrayList<>();
-            String json = Files.readString(Paths.get(workspaceRoot + "/.jls/settings.json"));
-            JsonObject jsonObject = JsonParser.parseString(json).getAsJsonObject();
-            JsonArray jsonArray = jsonObject.getAsJsonArray("java.externalDependencies");
-            for (JsonElement element : jsonArray) {
-                deps.add(element.getAsString());
-            }
-            return deps;
-        } catch (Exception e) {
-            LOG.warning(
-                    "Error while reading file "
-                            + (workspaceRoot + "/.jls/settings.json")
-                            + " : "
-                            + e.getMessage());
-            return new ArrayList<>();
-        }
-        // deps.add("org.springframework.boot:spring-boot-starter-web:3.4.5");
-        // deps.add("org.springframework:spring-web:6.2.7");
-        // deps.add("org.springframework:spring-webmvc:6.2.7");
-        // deps.add("org.springframework:spring-core:6.2.7");
-        // deps.add("org.springframework:spring-beans:6.2.7");
-        // deps.add("org.springframework:spring-context:6.2.7");
-        // return deps;
-        // .m2/repository/org/springframework/boot/spring-boot-starter/3.4.4/spring-boot-starter-3.4.4.jar does not exist
-    }
-
     InferConfig(
             Path workspaceRoot,
             Collection<String> externalDependencies,
             Path mavenHome,
             Path gradleHome) {
         this.workspaceRoot = workspaceRoot;
-        this.externalDependencies = readDependency(workspaceRoot);
+        this.externalDependencies = externalDependencies;
         this.mavenHome = mavenHome;
         this.gradleHome = gradleHome;
-        LOG.warning("----------  deps " + this.externalDependencies);
     }
 
     InferConfig(Path workspaceRoot, Collection<String> externalDependencies) {
@@ -97,25 +58,14 @@ class InferConfig {
         return Paths.get(System.getProperty("user.home")).resolve(".gradle");
     }
 
-    static boolean firstVisitClassPath = true;
-    static final String classPathSerName = ".jls/classes.ser";
-
     /**
      * Find .jar files for external dependencies, for examples maven dependencies in ~/.m2 or jars
      * in bazel-genfiles
      */
     Set<Path> classPath() {
+        var result = new HashSet<Path>();
         // externalDependencies
-        Set<Path> restored = restorePaths(classPathSerName);
-        LOG.info("restored object " + restored);
-        if (firstVisitClassPath && restored != null) {
-            firstVisitClassPath = false;
-            return restored;
-        }
-
-        Set<Path> result = Collections.emptySet();
         if (!externalDependencies.isEmpty()) {
-            result = new HashSet<Path>();
             for (var id : externalDependencies) {
                 var a = Artifact.parse(id);
                 var found = findAnyJar(a, false);
@@ -128,39 +78,39 @@ class InferConfig {
                 }
                 result.add(found);
             }
-            return result;
-        } else {
+            //return result;
+        }
 
-            // Maven
-            var pomXml = workspaceRoot.resolve("pom.xml");
-            if (Files.exists(pomXml)) {
-                Set<Path> deps = mvnDependencies(pomXml, "dependency:list");
-                result = deps;
-            } else {
+        // Maven
+        var pomXml = workspaceRoot.resolve("pom.xml");
+        if (Files.exists(pomXml)) {
+            var deps = mvnDependencies(pomXml, "dependency:list");
+            result.addAll(deps);
+                LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII pom deps size "+deps.size());
+        }
 
-                // Bazel
-                var bazelWorkspaceRoot = bazelWorkspaceRoot();
-                if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
-                    result = bazelClasspath(bazelWorkspaceRoot);
-                }
+        // Gradle
+        try {
+            createPomFromBuildGradle();
+            var pom = workspaceRoot.resolve(".jls/pom.xml");
+            LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII pom ??? "+pom);
+            if (Files.exists(pom)) {
+                var deps = mvnDependencies(pom, "dependency:list");
+                LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII jls depssize "+deps.size());
+                result.addAll(deps);
             }
+            LOG.warning("IIIIIIIIIIIIIIIIIIIIIIIIII result "+result.size());
+        } catch (IOException e) {
+            LOG.warning(e.getMessage());
         }
 
-        var classpathEnvVar = System.getenv("CLASSPATH");
-        LOG.fine(() -> "CLASSPATH=" + classpathEnvVar);
-        if (classpathEnvVar != null) {
-            var paths =
-                    Stream.of(classpathEnvVar.split(System.getProperty("path.separator")))
-                            .map(Path::of)
-                            .collect(Collectors.toSet());
-            LOG.fine(() -> "Paths from CLASSPATH = " + paths);
-            result = paths;
+        // Bazel
+        var bazelWorkspaceRoot = bazelWorkspaceRoot();
+        if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
+            result.addAll(bazelClasspath(bazelWorkspaceRoot));
         }
 
-        if (restored == null) {
-            savePaths(result, classPathSerName);
-        }
-        LOG.info("class path saved");
+        LOG.warning("total dependencies size: " + result.size()); 
         return result;
     }
 
@@ -173,23 +123,11 @@ class InferConfig {
         return workspaceRoot;
     }
 
-    static boolean firstVisitDocPath = true;
-    static final String docPathSerName = ".jls/doc.ser";
-
     /** Find source .jar files in local maven repository. */
     Set<Path> buildDocPath() {
+        var result = new HashSet<Path>();
         // externalDependencies
-        Set<Path> restored = restorePaths(docPathSerName);
-        LOG.info("restored object " + restored);
-        if (firstVisitDocPath && restored != null) {
-            firstVisitDocPath = false;
-            LOG.info("doc path restored");
-            return restored;
-        }
-
-        Set<Path> result = Collections.emptySet();
         if (!externalDependencies.isEmpty()) {
-            result = new HashSet<Path>();
             for (var id : externalDependencies) {
                 var a = Artifact.parse(id);
                 var found = findAnyJar(a, true);
@@ -202,23 +140,33 @@ class InferConfig {
                 }
                 result.add(found);
             }
-        } else {
-
-            // Maven
-            var pomXml = workspaceRoot.resolve("pom.xml");
-            if (Files.exists(pomXml)) {
-                result = mvnDependencies(pomXml, "dependency:sources");
-            }
-
-            // Bazel
-            var bazelWorkspaceRoot = bazelWorkspaceRoot();
-            if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
-                result = bazelSourcepath(bazelWorkspaceRoot);
-            }
+            //return result;
         }
-        if (restored == null) {
-            savePaths(result, docPathSerName);
+
+        // Maven
+        var pomXml = workspaceRoot.resolve("pom.xml");
+        if (Files.exists(pomXml)) {
+            result.addAll(mvnDependencies(pomXml, "dependency:sources"));
         }
+
+        // Gradle
+        try {
+            createPomFromBuildGradle();
+            var pom = workspaceRoot.resolve(".jls/pom.xml");
+            if (Files.exists(pom)) {
+                result.addAll(mvnDependencies(pom, "dependency:sources"));
+            }
+        } catch (IOException e) {
+            LOG.warning(e.getMessage());
+        }
+
+        // Bazel
+        var bazelWorkspaceRoot = bazelWorkspaceRoot();
+        if (Files.exists(bazelWorkspaceRoot.resolve("WORKSPACE"))) {
+            result.addAll(bazelSourcepath(bazelWorkspaceRoot));
+        }
+
+        LOG.warning("total doc paths size: " + result.size()); 
         return result;
     }
 
@@ -274,20 +222,9 @@ class InferConfig {
         return artifact.artifactId + '-' + artifact.version + (source ? "-sources" : "") + ".jar";
     }
 
-    static boolean firstVisitMvn = true;
-    static final String mvnSerName = ".jls/deps.ser";
-
     static Set<Path> mvnDependencies(Path pomXml, String goal) {
         Objects.requireNonNull(pomXml, "pom.xml path is null");
         try {
-            Set<Path> restored = restorePaths(mvnSerName);
-            LOG.info("restored object " + restored);
-            if (firstVisitMvn && restored != null) {
-                firstVisitMvn = false;
-                LOG.info("mvn path restored");
-                return restored;
-            }
-            var dependencies = new HashSet<Path>();
             // TODO consider using mvn valide dependency:copy-dependencies -DoutputDirectory=???
             // instead
             // Run maven as a subprocess
@@ -316,14 +253,12 @@ class InferConfig {
                 return Set.of();
             }
             // Read output
+            var dependencies = new HashSet<Path>();
             for (var line : Files.readAllLines(output)) {
                 var jar = readDependency(line);
                 if (jar != NOT_FOUND) {
                     dependencies.add(jar);
                 }
-            }
-            if (restored == null) {
-                savePaths(dependencies, mvnSerName);
             }
             return dependencies;
         } catch (InterruptedException | IOException e) {
@@ -634,41 +569,130 @@ class InferConfig {
         }
     }
 
-    static void saveObject(Object obj, String name) {
-        try (FileOutputStream fos = new FileOutputStream(name);
-                ObjectOutputStream oos = new ObjectOutputStream(fos)) {
-            oos.writeObject(obj);
-        } catch (Exception e) {
-            // ignore
-            LOG.severe(e.getMessage());
-        }
-    }
+    private void createPomFromBuildGradle() throws IOException {
+        Path gradleFilePath = Paths.get("build.gradle");
+        Path pomFileName = Paths.get("pom.xml");
+        Path pomDirectory = Paths.get(".jls");
+        String bootVersion = "";
 
-    public static Object restoreObject(String name) {
-        try (FileInputStream fis = new FileInputStream(name);
-                ObjectInputStream ois = new ObjectInputStream(fis)) {
-            return ois.readObject();
-        } catch (Exception e) {
-            LOG.severe(e.getMessage());
-            return null;
-        }
-    }
+        List<Dependency> dependencies = new ArrayList<>();
+        List<Dependency> platformDependencies = new ArrayList<>();
 
-    static void savePaths(Collection<Path> paths, String name) {
-        saveObject(paths.stream().map(p -> p.toUri()).toList(), name);
-    }
+        List<String> lines = Files.readAllLines(gradleFilePath);
 
-    static Set<Path> restorePaths(String name) {
-        Object obj = restoreObject(name);
-        if (obj != null) {
-            Set<Path> result = new HashSet<>();
-            for (URI uri : (Collection<URI>) obj) {
-                result.add(Paths.get(uri));
+        // Pattern for implementation dependencies
+        Pattern implPattern =
+                Pattern.compile(
+                            "implementation[\\s*,\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)?['\"]");
+        // Pattern for testImplementation dependencies
+        Pattern testImplPattern =
+                Pattern.compile(
+                        "testImplementation[\\s*,\\(,\\(platform\\(]*['\"](.*?:)(.*?)(:.*?)?['\"]");
+        // Pattern for spring boot plugin
+        Pattern bootPluginPattern = Pattern.compile("id 'org.springframework.boot' version '(.*?)'");
+
+        for (String line : lines) {
+            Matcher mm = bootPluginPattern.matcher(line);
+            if (mm.find()) {
+                bootVersion = mm.group(1); 
             }
-            return result;
+            if (line.contains("platform")) {
+                Matcher m = implPattern.matcher(line);
+                if (m.find()) {
+                    platformDependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), false));
+                }
+                m = testImplPattern.matcher(line);
+                if (m.find()) {
+                    platformDependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), true));
+                }
+            } else {
+                Matcher m = implPattern.matcher(line);
+                if (m.find()) {
+                    dependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), false));
+                }
+                m = testImplPattern.matcher(line);
+                if (m.find()) {
+                    dependencies.add(new Dependency(m.group(1), m.group(2), m.group(3), true));
+                }
+            }
         }
-        return null;
+
+        // Generate basic pom.xml
+        StringBuilder pom = new StringBuilder();
+        pom.append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        pom.append("<project xmlns=\"http://maven.apache.org/POM/4.0.0\"\n");
+        pom.append("         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\n");
+        pom.append("         xsi:schemaLocation=\"http://maven.apache.org/POM/4.0.0\n");
+        pom.append("                             http://maven.apache.org/xsd/maven-4.0.0.xsd\">\n");
+        pom.append("  <modelVersion>4.0.0</modelVersion>\n");
+        
+        // make parent
+        if (!bootVersion.isEmpty()) {
+    	    pom.append("  <parent>\n");
+	        pom.append("    <groupId>org.springframework.boot</groupId>\n");
+		    pom.append("    <artifactId>spring-boot-starter-parent</artifactId>\n");
+		    pom.append("    <version>"+bootVersion+"</version>\n");
+	        pom.append("  </parent>\n");
+        }
+    
+        // Placeholder project info
+        pom.append("  <groupId>com.example</groupId>\n");
+        pom.append("  <artifactId>my-app</artifactId>\n");
+        pom.append("  <version>1.0-SNAPSHOT</version>\n");
+
+        pom.append("  <dependencyManagement>\n");
+        pom.append("    <dependencies>\n");
+        for (Dependency dep : platformDependencies) {
+            pom.append("      <dependency>\n");
+            pom.append("        <groupId>")
+                    .append(dep.groupId.replace(":", ""))
+                    .append("</groupId>\n");
+            pom.append("        <artifactId>").append(dep.artifactId).append("</artifactId>\n");
+            if (dep.version != null) {
+                pom.append("        <version>")
+                        .append(dep.version.replace(":", ""))
+                        .append("</version>\n");
+            }
+            pom.append("        <type>pom</type>\n");
+            if (dep.isTest) {
+                pom.append("        <scope>test</scope>\n");
+            }
+            pom.append("      </dependency>\n"); 
+        }
+        pom.append("    </dependencies>\n");
+        pom.append("  </dependencyManagement>\n");
+        pom.append("  <dependencies>\n");
+
+        for (Dependency dep : dependencies) {
+            pom.append("    <dependency>\n");
+            pom.append("      <groupId>")
+                    .append(dep.groupId.replace(":", ""))
+                    .append("</groupId>\n");
+            pom.append("      <artifactId>").append(dep.artifactId).append("</artifactId>\n");
+            if (dep.version != null) {
+                pom.append("      <version>")
+                        .append(dep.version.replace(":", ""))
+                        .append("</version>\n");
+            }
+            if (dep.isTest) {
+                pom.append("      <scope>test</scope>\n");
+            }
+            pom.append("    </dependency>\n");
+        }
+
+        pom.append("  </dependencies>\n");
+
+        pom.append("</project>\n");
+
+        // Write to pom.xml
+        if (!Files.exists(pomDirectory)) {
+            Files.createDirectory(pomDirectory);
+        }
+        Files.write(pomDirectory.resolve(pomFileName), pom.toString().getBytes());
+
     }
+
+    record Dependency(String groupId, String artifactId, String version, boolean isTest) {}
 
     private static final Path NOT_FOUND = Paths.get("");
 }
