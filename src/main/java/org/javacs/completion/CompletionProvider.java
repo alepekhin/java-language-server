@@ -613,7 +613,7 @@ public class CompletionProvider {
     private CompletionItem method(CompileTask task, List<ExecutableElement> overloads, boolean addParens) {
         var first = overloads.get(0);
         var i = new CompletionItem();
-        i.label = first.getSimpleName().toString();
+        i.label = first.getSimpleName().toString() + "()";
         i.kind = CompletionItemKind.Method;
         i.detail = first.getReturnType() + " " + first;
         var data = data(task, first, overloads.size());

@@ -574,6 +574,7 @@ class InferConfig {
         Path pomFileName = Paths.get("pom.xml");
         Path pomDirectory = Paths.get(".jls");
         String bootVersion = "";
+        boolean addLombok = false;
 
         List<Dependency> dependencies = new ArrayList<>();
         List<Dependency> platformDependencies = new ArrayList<>();
@@ -592,6 +593,9 @@ class InferConfig {
         Pattern bootPluginPattern = Pattern.compile("id 'org.springframework.boot' version '(.*?)'");
 
         for (String line : lines) {
+            if (line.contains("lombok")) {
+                addLombok = true;
+            }
             Matcher mm = bootPluginPattern.matcher(line);
             if (mm.find()) {
                 bootVersion = mm.group(1); 
@@ -642,6 +646,7 @@ class InferConfig {
 
         pom.append("  <dependencyManagement>\n");
         pom.append("    <dependencies>\n");
+        
         for (Dependency dep : platformDependencies) {
             pom.append("      <dependency>\n");
             pom.append("        <groupId>")
@@ -663,6 +668,15 @@ class InferConfig {
         pom.append("  </dependencyManagement>\n");
         pom.append("  <dependencies>\n");
 
+        if (addLombok) {
+            pom.append("      <dependency>\n");
+            pom.append("        <groupId>org.projectlombok</groupId>\n");
+            pom.append("        <artifactId>lombok</artifactId>\n");
+            pom.append("        <version>1.18.24</version>\n");
+            pom.append("        <scope>provided</scope>\n");
+            pom.append("      </dependency>\n"); 
+        }
+
         for (Dependency dep : dependencies) {
             pom.append("    <dependency>\n");
             pom.append("      <groupId>")
@@ -681,6 +695,27 @@ class InferConfig {
         }
 
         pom.append("  </dependencies>\n");
+
+        // add annotation processor
+        if (addLombok) {
+            pom.append("  <build>\n");
+	        pom.append("    <plugins>\n");
+		    pom.append("      <plugin>\n");
+			pom.append("        <groupId>org.apache.maven.plugins</groupId>\n");
+			pom.append("        <artifactId>maven-compiler-plugin</artifactId>\n");
+			pom.append("        <configuration>\n");
+		    pom.append("          <annotationProcessorPaths>\n");
+			pom.append("            <path>\n");
+			pom.append("              <groupId>org.projectlombok</groupId>\n");
+			pom.append("              <artifactId>lombok</artifactId>\n");
+			pom.append("              <version>1.18.24</version>\n");
+			pom.append("            </path>\n");
+			pom.append("          </annotationProcessorPaths>\n");
+			pom.append("        </configuration>\n");
+		    pom.append("      </plugin>\n");
+	        pom.append("    </plugins>\n");
+            pom.append("  </build>\n");
+        }
 
         pom.append("</project>\n");
 
